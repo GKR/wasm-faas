@@ -3,10 +3,9 @@ use std::sync::{Arc, RwLock};
 use std::io;
 use std::process::{Command, Stdio};
 use std::result;
-use std::str;
-
-use std::fs::File;
-use std::io::{ BufRead, BufReader };
+//use std::str;
+//use std::fs::File;
+//use std::io::{ BufRead, BufReader };
 
 use duct::cmd;
 
@@ -14,10 +13,12 @@ use wasmtime::{Config, Engine, Linker, Module, Store};
 use wasmtime_wasi::sync::WasiCtxBuilder;
 use wasi_common::pipe::{WritePipe};
 
-use actix_web::{get, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use actix_web::web::{Query, Path};
+use actix_files::NamedFile;
+use std::path::PathBuf;
 
-fn invoke_wasm_module(module_name: String, params: HashMap<String, String>) -> result::Result<String, wasmtime_wasi::Error> {
+fn invoke_wasm_module(module_name: String, params: HashMap<String, String>) -> result::Result<String, wasmtime::Error> {
     let mut cfg = Config::new();
     cfg.consume_fuel(true);
     //let engine = Engine::default();
@@ -46,8 +47,20 @@ fn invoke_wasm_module(module_name: String, params: HashMap<String, String>) -> r
     linker.module(&mut store, &module_name, &module)?;
 
     let instance = linker.instantiate(&mut store, &module)?;
-    let instance_main = instance.get_typed_func::<(), (), _>(&mut store, "_start")?;
+    let instance_main = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     instance_main.call(&mut store, ())?;
+
+    match instance.get_typed_func::<(), ()>(&mut store, "_start_3") {
+        Some(fun) => {
+
+        },
+        None => {
+
+        }
+    }
+    let fun_export = instance.get_typed_func::<(), ()>(&mut store, "_start_3")?;
+    fun_export.call(&mut store, ())?;
+    fun_export.call(&mut store, ())?;
 
     // https://docs.wasmtime.dev/api/wasmtime/struct.Memory.html#method.size
     // WebAssembly memories represent a contiguous array of bytes that have a size that is 
@@ -139,6 +152,15 @@ async fn handler(module_name: Path<String>, query: Query<HashMap<String, String>
     HttpResponse::Ok().body(val)
 }
 
+async fn index(req: HttpRequest) -> Result<NamedFile> {
+    let path: PathBuf = req.match_info().query("filename").parse().unwrap();
+    println!("path: {}", path.display());
+    if path.as_os_str().is_empty() {
+        let index = PathBuf::from(r"./index.html");
+        return Ok(NamedFile::open(index)?)
+    }
+    Ok(NamedFile::open(path)?)
+}
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -147,6 +169,7 @@ async fn main() -> io::Result<()> {
                 .service(handler_ls)
                 .service(handler_compile)
                 .service(handler)
+                .route("/{filename:.*}", actix_web::web::get().to(index))
         })
         .bind("127.0.0.1:8080")?
         .run()

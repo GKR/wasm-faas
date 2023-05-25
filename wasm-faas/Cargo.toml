@@ -6,9 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-actix-web = "3"
+actix-web = "4.3.1"
 anyhow = "1.0"
-wasmtime = "0.35.1"
-wasmtime-wasi = "0.35.2"
-wasi-common = "0.35.2"
+wasmtime = "9.0.1"
+wasmtime-wasi = "9.0.1"
+wasi-common = "9.0.1"
 duct = "0.13.6"
+actix-files = "0.6.2"
+zstd-sys = "2.0.8+zstd.1.5.5"

@@ -15,3 +15,11 @@ let counter = 0;
 while (counter < 10) {
   counter += 1;
 }
+
+let counter_start = 0;
+
+//export function _start_2(a: i32, b: i32): i32 {
+export function _start_2(): void {
+  Console.log("_start_2(): Hello World!, counter_start: " + counter_start.toString());
+  counter_start += 1;
+}
