@@ -10,3 +10,8 @@ for (let i = 0; i < variables.length; i++) {
   let v = variables[i];
   Console.log(`${v.key}: ${v.value}`);
 }
+
+let counter = 0;
+while (counter < 10) {
+  counter += 1;
+}
