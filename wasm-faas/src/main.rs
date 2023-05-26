@@ -3,7 +3,10 @@ use std::sync::{Arc, RwLock};
 use std::io;
 use std::process::{Command, Stdio};
 use std::result;
-//use std::str;
+use std::str;
+use std::env;
+use std::io::Write; // bring trait into scope
+use std::fs;
 //use std::fs::File;
 //use std::io::{ BufRead, BufReader };
 
@@ -13,10 +16,25 @@ use wasmtime::{Config, Engine, Linker, Module, Store};
 use wasmtime_wasi::sync::WasiCtxBuilder;
 use wasi_common::pipe::{WritePipe};
 
-use actix_web::{get, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
+use actix_web::{get, web, App, HttpRequest, HttpResponse, HttpServer, Responder, Result};
 use actix_web::web::{Query, Path};
 use actix_files::NamedFile;
 use std::path::PathBuf;
+
+use json::JsonValue;
+use serde::{Deserialize, Serialize};
+use serde_json;
+
+use futures_util::stream::StreamExt;
+
+use base64::{Engine as _, engine::general_purpose};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MyObj {
+    name: String,
+    number: i32,
+    data_b64: String,
+}
 
 fn invoke_wasm_module(module_name: String, params: HashMap<String, String>) -> result::Result<String, wasmtime::Error> {
     let mut cfg = Config::new();
@@ -51,16 +69,16 @@ fn invoke_wasm_module(module_name: String, params: HashMap<String, String>) -> r
     instance_main.call(&mut store, ())?;
 
     match instance.get_typed_func::<(), ()>(&mut store, "_start_3") {
-        Some(fun) => {
-
+        Ok(func) => {
+            func.call(&mut store, ())?;
         },
-        None => {
-
+        _error => {
+            println!("found no exported function named _start_3()");
         }
     }
-    let fun_export = instance.get_typed_func::<(), ()>(&mut store, "_start_3")?;
-    fun_export.call(&mut store, ())?;
-    fun_export.call(&mut store, ())?;
+    //let fun_export = instance.get_typed_func::<(), ()>(&mut store, "_start_3")?;
+    //fun_export.call(&mut store, ())?;
+    //fun_export.call(&mut store, ())?;
 
     // https://docs.wasmtime.dev/api/wasmtime/struct.Memory.html#method.size
     // WebAssembly memories represent a contiguous array of bytes that have a size that is 
@@ -162,12 +180,84 @@ async fn index(req: HttpRequest) -> Result<NamedFile> {
     Ok(NamedFile::open(path)?)
 }
 
+const MAX_SIZE: usize = 262_144; // max payload size is 256k
+
+/// This handler manually load request payload and parse json object
+async fn index_manual(mut payload: web::Payload) -> Result<HttpResponse, actix_web::Error> {
+    // payload is a stream of Bytes objects
+    let mut body = web::BytesMut::new();
+    
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk?;
+        // limit max size of in-memory payload
+        if (body.len() + chunk.len()) > MAX_SIZE {
+            return Err(actix_web::error::ErrorBadRequest("overflow"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    // body is loaded, now we can deserialize serde-json
+    let obj = serde_json::from_slice::<MyObj>(&body)?;
+
+    let data_b64 = obj.data_b64.clone();
+    let decoded_data_b64 = general_purpose::STANDARD.decode(data_b64).unwrap();
+    let decoded_b64 = str::from_utf8(&decoded_data_b64);
+
+    let mut path_to_file = String::new();
+    match env::current_exe() {
+        Ok(exe_path) => {
+            let exe_path_dsp = exe_path.display();
+            path_to_file = format!("{exe_path_dsp}-010101.rs");
+            println!("Path of this executable is: {}", exe_path.display());
+            println!("path_to_file: {}", path_to_file);
+        },
+        Err(e) => println!("failed to get current exe path: {e}"),
+    };
+
+    if !path_to_file.is_empty() {
+        let mut file = fs::OpenOptions::new()
+            .create(true) // To create a new file
+            .write(true)
+            // either use the ? operator or unwrap since it returns a Result
+            .open(path_to_file)?;
+        
+        match file.write_all(&decoded_data_b64) {
+            Ok(_result) => {
+                println!("File written");
+            }
+            Err(e) => {
+                println!("Error writing file: {}", e);
+            }
+        }
+    }
+
+    println!("decoded_b64: [{}]", decoded_b64.unwrap());
+
+    Ok(HttpResponse::Ok().json(obj)) // <- send response
+}
+
+/// This handler manually load request payload and parse json-rust
+async fn index_mjsonrust(body: web::Bytes) -> Result<HttpResponse, actix_web::Error> {
+    // body is loaded, now we can deserialize json-rust
+    let result = json::parse(std::str::from_utf8(&body).unwrap()); // return Result
+    let injson: JsonValue = match result {
+        Ok(v) => v,
+        Err(e) => json::object! {"err" => e.to_string() },
+    };
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .body(injson.dump()))
+}
+
 #[actix_web::main]
 async fn main() -> io::Result<()> {
     HttpServer::new(|| {
             App::new()
+                .app_data(web::JsonConfig::default().limit(4096)) // <- limit size of the payload (global configuration)
                 .service(handler_ls)
                 .service(handler_compile)
+                .service(web::resource("/api/manual").route(web::post().to(index_manual)))
+                .service(web::resource("/api/mjsonrust").route(web::post().to(index_mjsonrust)))
                 .service(handler)
                 .route("/{filename:.*}", actix_web::web::get().to(index))
         })
