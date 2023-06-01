@@ -29,6 +29,8 @@ use futures_util::stream::StreamExt;
 
 use base64::{Engine as _, engine::general_purpose};
 
+use uuid::Uuid;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct MyObj {
     name: String,
@@ -98,6 +100,8 @@ fn invoke_wasm_module(module_name: String, params: HashMap<String, String>) -> r
     });
 
     let s = String::from_utf8(buffer)?;
+    println!("output: {}", s);
+
     Ok(s)
 }
 
@@ -159,7 +163,7 @@ async fn handler_compile(_query: Query<HashMap<String, String>>) -> impl Respond
     HttpResponse::Ok().body(s)
 }
 
-#[get("/{module_name}")]
+#[get("/module/{module_name}")]
 async fn handler(module_name: Path<String>, query: Query<HashMap<String, String>>)
     -> impl Responder {
     let wasm_module = format!("{}{}", module_name, ".wasm");
@@ -204,20 +208,40 @@ async fn index_manual(mut payload: web::Payload) -> Result<HttpResponse, actix_w
     let decoded_b64 = str::from_utf8(&decoded_data_b64);
 
     let mut path_to_file = String::new();
+    let mut path_to_dir = String::new();
+    let id = Uuid::new_v4().to_string();
+    let code_dir = format!("{id}");
+
+    let file_name = Uuid::new_v4().to_string();
+    let file_name_str = format!("{file_name}");
+    
     match env::current_exe() {
         Ok(exe_path) => {
-            let exe_path_dsp = exe_path.display();
-            path_to_file = format!("{exe_path_dsp}-010101.rs");
+            let mut exe_dir = exe_path.clone();
+            exe_dir.pop();
+
+            let code_folder = exe_dir.display().to_string();
+            path_to_dir = format!("{code_folder}/{code_dir}");
+            path_to_file = format!("{path_to_dir}/{file_name_str}.rs");
+
+            println!("code_folder: {}", path_to_dir.clone());
             println!("Path of this executable is: {}", exe_path.display());
             println!("path_to_file: {}", path_to_file);
         },
         Err(e) => println!("failed to get current exe path: {e}"),
     };
 
+    fs::create_dir_all(path_to_dir.clone())?;
+
+    //let path_to_dir_target = format!("{path_to_dir}/target/wasm32-wasi/release/deps");
+    //fs::create_dir_all(path_to_dir_target.clone())?;
+
+    let path_to_file_compile = path_to_file.clone();
     if !path_to_file.is_empty() {
         let mut file = fs::OpenOptions::new()
             .create(true) // To create a new file
             .write(true)
+            .truncate(true)
             // either use the ? operator or unwrap since it returns a Result
             .open(path_to_file)?;
         
@@ -233,7 +257,20 @@ async fn index_manual(mut payload: web::Payload) -> Result<HttpResponse, actix_w
 
     println!("decoded_b64: [{}]", decoded_b64.unwrap());
 
-    Ok(HttpResponse::Ok().json(obj)) // <- send response
+    //let output_dir = format!("{code_dir}");
+    //let output_dir_path = PathBuf::from(&output_dir);
+    //let output_dir_absolute = fs::canonicalize(&output_dir_path).unwrap();
+
+    let output = cmd!("sh", "run-rustc.sh", path_to_file_compile, path_to_dir, "hello-test").stdout_to_stderr().stderr_capture().unchecked().run().unwrap();
+    let s = String::from_utf8(output.stderr).unwrap();
+    println!("run-rustc:sh: [{}]", s);
+
+    //Ok(HttpResponse::Ok().json(obj)) // <- send response
+
+    //let response = json::object! {"result" => s };
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .body(s))
 }
 
 /// This handler manually load request payload and parse json-rust
